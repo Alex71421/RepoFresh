@@ -125,6 +125,60 @@ def add_repository(config):                                     # Добавля
         return
 
 
+def remove_repository(config):                                  # Удаляет репозиторий из списка по названию.
+    repositories = config['repositories']                       # Получение списка репозиториев из конфига
+
+    if not repositories:                                        # Проверка что список не пустой
+        print("Список репозиториев пуст. Нечего удалять.")
+        return
+
+    print("\nТекущие репозитории:")                             # Заголовок списка
+    for i, repo in enumerate(repositories, 1):                  # Перебор репозиториев с нумерацией
+        print(f"{i}. {repo['name']} - {repo['path']}")          # Вывод номера, названия и пути
+
+    repo_name = input("\nВведите название репозитория для удаления: ").strip()  # Запрос названия для удаления
+
+    if not repo_name:                                           # Проверка что название не пустое
+        print("Название не может быть пустым.")
+        return
+
+    found_index = -1                                            # Инициализация переменной для найденного индекса
+    for i, repo in enumerate(repositories):                     # Перебор репозиториев для поиска по имени
+        if repo['name'] == repo_name:                           # Проверка совпадения названия
+            found_index = i                                     # Сохранение найденного индекса
+            break                                               # Выход из цикла поиска
+
+    if found_index != -1:                                       # Проверка что репозиторий найден
+        removed_repo = repositories.pop(found_index)            # Удаление репозитория из списка по индексу
+        if save_config(config):                                 # Сохранение обновленной конфигурации
+            print(f"Репозиторий '{removed_repo['name']}' успешно удален!")  # Сообщение об успехе
+            print(f"Осталось репозиториев: {len(repositories)}")  # Вывод оставшегося количества
+        else:
+            print("Ошибка при сохранении конфигурации.")
+    else:
+        print(f"Репозиторий с названием '{repo_name}' не найден.")
+
+
+def clear_all_repositories(config):                             # Очищает весь список репозиториев.
+    repositories = config['repositories']                       # Получение списка репозиториев из конфига
+
+    if not repositories:                                        # Проверка что список не пустой
+        print("Список репозиториев уже пуст.")
+        return
+
+    print(f"Вы собираетесь удалить ВСЕ репозитории ({len(repositories)} шт.)!")  # Предупреждение
+    confirm = input("Вы уверены? (да/нет): ").strip().lower()   # Запрос подтверждения
+
+    if confirm == 'да':                                         # Проверка подтверждения (русская и английская y)
+        config['repositories'] = []                             # Очистка списка репозиториев
+        if save_config(config):                                 # Сохранение пустой конфигурации
+            print("Все репозитории успешно удалены!")
+        else:
+            print("Ошибка при сохранении конфигурации.")
+    else:
+        print("Удаление отменено.")
+
+
 def list_repositories(config):                                  # Выводит список всех добавленных репозиториев.
     repositories = config['repositories']                       # Получение списка репозиториев из конфига
 
@@ -149,7 +203,9 @@ def list_repositories(config):                                  # Выводит
 def show_menu():                                                # Показывает главное меню программы.
     print("1. Показать список репозиториев")                    # Пункт меню 1
     print("2. Добавить репозиторий")                            # Пункт меню 2
-    print("3. Выход")                                           # Пункт меню 3
+    print("3. Удалить репозиторий (по названию)")               # Пункт меню 3
+    print("4. Очистить весь список")                            # Пункт меню 4
+    print("5. Выход")                                           # Пункт меню 5
 
 
 def main():                                                     # Основная функция программы.
@@ -159,16 +215,20 @@ def main():                                                     # Основна
         show_menu()                                             # Отображение меню
 
         try:
-            choice = input("\nВыберите действие (1-3): ").strip()  # Запрос выбора у пользователя
+            choice = input("\nВыберите действие (1-5): ").strip()  # Запрос выбора у пользователя
 
             if choice == '1':
                 list_repositories(config)                       # Показать список репозиториев
             elif choice == '2':
                 add_repository(config)                          # Добавить репозиторий
             elif choice == '3':
+                remove_repository(config)                       # Удалить репозиторий
+            elif choice == '4':
+                clear_all_repositories(config)                  # Очистить весь список
+            elif choice == '5':
                 break                                           # Выход из цикла
             else:
-                print("Неверный выбор. Пожалуйста, выберите от 1 до 3.")
+                print("Неверный выбор. Пожалуйста, выберите от 1 до 5.")
 
             input("\nНажмите Enter для продолжения...")         # Ожидание нажатия Enter
 
