@@ -2,6 +2,7 @@ import json                                                     # Импорт �
 import os                                                       # Импорт модуля для работы с операционной системой
 import sys                                                      # Импорт модуля для работы с системными функциями
 from pathlib import Path                                        # Импорт класса Path для работы с путями
+import subprocess                                               # Импорт модуля для выполнения системных команд
 
 CONFIG_FILE = Path(__file__).parent / 'repofresh_config.json'   # Определение пути к конфигурационному файлу
 
@@ -179,6 +180,99 @@ def clear_all_repositories(config):                             # Очищает
         print("Удаление отменено.")
 
 
+def run_git_command(repo_path, command):                        # Выполняет Git команду в указанном репозитории.
+    try:
+        full_command = ['git', '-C', repo_path] + command       # Формирование полной команды с путем
+        result = subprocess.run(                                # Запуск процесса выполнения команды
+            full_command,                                       # Полная команда для выполнения
+            capture_output=True,                                # Перехват вывода команды
+            text=True,                                          # Возврат вывода как текста
+            check=True                                          # Проверка успешности выполнения
+        )
+        return result.stdout.strip()                            # Возврат очищенного вывода команды
+    except Exception as e:                                      # Обработка ошибки выполнения команды
+        print(f'Ошибка при выполнении команды: {e}')
+        return None
+
+
+def check_repository_status(repo_path):                         # Проверяет статус актуальности репозитория.
+    try:
+        current_branch = run_git_command(repo_path, ['symbolic-ref', '--short', 'HEAD'])  # Получение текущей ветки
+        if not current_branch:                                  # Проверка что ветка определена
+            return "Не удалось определить ветку"                # Статус если ветка не определена
+
+        run_git_command(repo_path, ['fetch', '--quiet'])  # Обновление информации с удаленного репозитория
+
+        remote_branch = f"origin/{current_branch}"              # Формирование имени удаленной ветки
+
+        # Проверка отставания от удаленного репозитория
+        behind_commits = run_git_command(repo_path, ['log', '--oneline', f'HEAD..{remote_branch}'])  # Коммиты в remote
+        # Проверка неотправленных коммитов
+        ahead_commits = run_git_command(repo_path, ['log', '--oneline', f'{remote_branch}..HEAD'])  # Локальные коммиты
+
+        is_behind = bool(behind_commits)                        # Проверка есть ли отставание
+        is_ahead = bool(ahead_commits)                          # Проверка есть ли неотправленные коммиты
+
+        if not is_behind and not is_ahead:                      # Если репозиторий актуален
+            return "✅ Актуален"                                # Статус актуальности
+        else:
+            status_parts = []                                   # Список для частей статуса
+            if is_behind:                                       # Если есть отставание
+                commit_count = len(behind_commits.splitlines()) # Подсчет коммитов отставания
+                status_parts.append(f"❌ Отстает на {commit_count} коммитов")  # Добавление статуса отставания
+            if is_ahead:                                        # Если есть неотправленные коммиты
+                commit_count = len(ahead_commits.splitlines())  # Подсчет неотправленных коммитов
+                status_parts.append(f"⚠️  Неотправленных: {commit_count}")  # Добавление статуса неотправленных
+            return " | ".join(status_parts)                     # Объединение статусов через разделитель
+
+    except Exception as e:                                      # Обработка ошибок проверки
+        return f"Ошибка проверки: {str(e)}"                     # Статус с ошибкой
+
+
+def update_repository(repo_path):                               # Обновляет репозиторий (git pull).
+    try:
+        result = run_git_command(repo_path, ['pull'])  # Выполнение git pull
+        if result is not None:                                  # Проверка успешности выполнения
+            return "Успешно обновлен"                           # Статус успешного обновления
+    except Exception as e:                                      # Обработка ошибок обновления
+        return f"Ошибка обновления: {str(e)}"                   # Статус с ошибкой
+
+
+def update_all_repositories(config):                            # Обновляет все репозитории.
+    repositories = config['repositories']                       # Получение списка репозиториев
+
+    if not repositories:                                        # Проверка что список не пустой
+        print("Список репозиториев пуст.")                      # Сообщение о пустом списке
+        return                                                  # Выход из функции
+
+    print("\nОбновление всех репозиториев...")                  # Заголовок обновления
+
+    updated_count = 0                                           # Счетчик обновленных репозиториев
+
+    for i, repo in enumerate(repositories, 1):                  # Перебор репозиториев с нумерацией
+        print(f"{i}. {repo['name']} - {repo['path']}")          # Вывод репозитория
+
+        status_before = check_repository_status(repo['path'])   # Проверка статуса до обновления
+        print(f"До: {status_before}")                           # Вывод статуса до обновления
+
+
+        if "❌ Отстает" in status_before:                       # Если репозиторий отстает, обновляем его
+            update_status = update_repository(repo['path'])     # Обновление репозитория
+            print(f" {update_status}")                          # Вывод статуса обновления
+
+            status_after = check_repository_status(repo['path'])  # Проверка статуса после обновления
+            print(f"После: {status_after}")                     # Вывод статуса после обновления
+
+            if "✅ Актуален" in status_after:                   # Проверка стал ли актуальным
+                updated_count += 1                              # Увеличение счетчика обновленных
+        else:
+            print("Уже актуален, пропускаем")                   # Сообщение если уже актуален
+
+        print()                                                 # Пустая строка между репозиториями
+
+    print(f"Обновлено репозиториев: {updated_count}/{len(repositories)}")  # Итог обновления
+
+
 def list_repositories(config):                                  # Выводит список всех добавленных репозиториев.
     repositories = config['repositories']                       # Получение списка репозиториев из конфига
 
@@ -190,13 +284,10 @@ def list_repositories(config):                                  # Выводит
     print()
 
     for i, repo in enumerate(repositories, 1):                  # Перебор репозиториев с нумерацией
-                                                                # Проверяем, существует ли репозиторий
-        if os.path.exists(repo['path']):                        # Проверка существования пути
-            status = "Обновлен"
-        else:
-            status = "Требует обновления"
 
-        print(f"{i:2d}. {status} {repo['name']} {repo['path']}")  # Вывод инфы о репозитории
+        status = check_repository_status(repo['path'])          # Проверка статуса актуальности
+
+        print(f"{i:2d}. {status} {repo['name']} {repo['path']}")# Вывод инфы о репозитории
         print()
 
 
@@ -205,7 +296,8 @@ def show_menu():                                                # Показыв
     print("2. Добавить репозиторий")                            # Пункт меню 2
     print("3. Удалить репозиторий (по названию)")               # Пункт меню 3
     print("4. Очистить весь список")                            # Пункт меню 4
-    print("5. Выход")                                           # Пункт меню 5
+    print("5. Обновить все репозитории (git pull)")             # Пункт меню 5
+    print("6. Выход")                                           # Пункт меню 6
 
 
 def main():                                                     # Основная функция программы.
@@ -215,7 +307,7 @@ def main():                                                     # Основна
         show_menu()                                             # Отображение меню
 
         try:
-            choice = input("\nВыберите действие (1-5): ").strip()  # Запрос выбора у пользователя
+            choice = input("\nВыберите действие (1-6): ").strip()  # Запрос выбора у пользователя
 
             if choice == '1':
                 list_repositories(config)                       # Показать список репозиториев
@@ -226,9 +318,11 @@ def main():                                                     # Основна
             elif choice == '4':
                 clear_all_repositories(config)                  # Очистить весь список
             elif choice == '5':
+                update_all_repositories(config)                 # Проверить актуальность всех репозиториев
+            elif choice == '6':
                 break                                           # Выход из цикла
             else:
-                print("Неверный выбор. Пожалуйста, выберите от 1 до 5.")
+                print("Неверный выбор. Пожалуйста, выберите от 1 до 6.")
 
             input("\nНажмите Enter для продолжения...")         # Ожидание нажатия Enter
 
