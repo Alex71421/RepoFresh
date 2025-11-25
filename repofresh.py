@@ -3,8 +3,14 @@ import os                                                       # Импорт �
 import sys                                                      # Импорт модуля для работы с системными функциями
 from pathlib import Path                                        # Импорт класса Path для работы с путями
 import subprocess                                               # Импорт модуля для выполнения системных команд
+import threading                                                # Импорт модуля для многопоточности
+import time                                                     # Импорт модуля для работы со временем
 
 CONFIG_FILE = Path(__file__).parent / 'repofresh_config.json'   # Определение пути к конфигурационному файлу
+
+                                                                # Глобальные переменные для управления автоматической проверкой
+auto_check_thread = None                                        # Поток автоматической проверки
+auto_check_running = False                                      # Флаг работы автоматической проверки
 
 
 def load_config():                                              # Загружает конфигурацию из JSON-файла.
@@ -17,14 +23,14 @@ def load_config():                                              # Загружа
             "config_path": str(CONFIG_FILE)
         }
         save_config(initial_config)                             # Сохранение начальной конфигурации
-        print(f""
-              f"Создан новый конфигурационный файл: {CONFIG_FILE}")  # Информационное сообщение
+        print(f"Создан новый конфигурационный файл: {CONFIG_FILE}")  # Информационное сообщение
         return initial_config                                   # Возврат начальной конфигурации
 
     try:
         with open(CONFIG_FILE, 'r', encoding='utf-8') as f:     # Открытие файла для чтения
             config = json.load(f)                               # Загрузка данных из JSON
         print(f"Конфигурация загружена из: {CONFIG_FILE}")      # Сообщение об успешной загрузке
+
         return config                                           # Возврат загруженной конфигурации
 
     except (json.JSONDecodeError, KeyError) as e:               # Обработка ошибок чтения JSON
@@ -222,7 +228,7 @@ def check_repository_status(repo_path):                         # Проверя
                 status_parts.append(f"❌ Отстает на {commit_count} коммитов")  # Добавление статуса отставания
             if is_ahead:                                        # Если есть неотправленные коммиты
                 commit_count = len(ahead_commits.splitlines())  # Подсчет неотправленных коммитов
-                status_parts.append(f"⚠️  Неотправленных: {commit_count}")  # Добавление статуса неотправленных
+                status_parts.append(f"⚠️ Неотправленных: {commit_count}")  # Добавление статуса неотправленных
             return " | ".join(status_parts)                     # Объединение статусов через разделитель
 
     except Exception as e:                                      # Обработка ошибок проверки
@@ -234,6 +240,8 @@ def update_repository(repo_path):                               # Обновля
         result = run_git_command(repo_path, ['pull'])  # Выполнение git pull
         if result is not None:                                  # Проверка успешности выполнения
             return "Успешно обновлен"                           # Статус успешного обновления
+        else:
+            return "Ошибка при обновлении"                      # Статус если результат None
     except Exception as e:                                      # Обработка ошибок обновления
         return f"Ошибка обновления: {str(e)}"                   # Статус с ошибкой
 
@@ -291,23 +299,134 @@ def list_repositories(config):                                  # Выводит
         print()
 
 
-def show_menu():                                                # Показывает главное меню программы.
+def start_auto_check(config, interval=None):                    # Запускает автоматическую проверку репозиториев.
+    global auto_check_thread, auto_check_running                # Использование глобальных переменных
+
+    if auto_check_running:                                      # Проверка уже запущена ли автоматическая проверка
+        print("Автоматическая проверка уже запущена.")
+        return
+
+    if interval is None:                                        # Проверка не передан ли интервал
+        try:
+            interval = int(input("Введите интервал проверки в минутах: ").strip())  # Запрос интервала у пользователя
+        except ValueError:                                          # Обработка ошибки преобразования в число
+            print("Неверный формат числа. Использую интервал по умолчанию: 30 минут")
+            interval = 30                                           # Интервал по умолчанию
+
+    if interval < 1:                                            # Проверка минимального интервала
+        print("Интервал не может быть меньше 1 минуты. Использую 1 минуту")
+        interval = 1                                            # Минимальный интервал
+
+    def auto_check_loop():                                      # Функция цикла автоматической проверки
+        global auto_check_running                               # Использование глобальной переменной
+        check_count = 0                                         # Счетчик выполненных проверок
+
+        while auto_check_running:                               # Цикл пока флаг запущен
+            try:
+                check_count += 1                                # Увеличение счетчика проверок
+                current_time = time.strftime("%H:%M:%S")        # Получение текущего времени
+                print(f"\n[{current_time}] 🔄 Автопроверка #{check_count}...")  # Сообщение о начале проверки
+
+                                                                # Проверяем все репозитории
+                repositories_checked = 0                        # Счетчик проверенных репозиториев
+                for repo in config['repositories']:             # Перебор всех репозиториев
+                    if not auto_check_running:                  # Проверка не остановлена ли проверка
+                        break                                   # Выход из цикла если остановлена
+
+                    status = check_repository_status(repo['path'])  # Проверка статуса репозитория
+                    print(f"{repo['name']}: {status}")          # Вывод статуса репозитория
+                    repositories_checked += 1                   # Увеличение счетчика проверенных
+
+                print(f"Проверено репозиториев: {repositories_checked}")
+
+                for _ in range(interval * 60):                  # Цикл ожидания (в секундах) до следующей проверки
+                    if not auto_check_running:                  # Проверка не остановлена ли проверка
+                        break                                   # Выход из цикла если остановлена
+                    time.sleep(1)                               # Ожидание 1 секунду
+
+            except Exception as e:                              # Обработка ошибок в цикле проверки
+                print(f"Ошибка в автоматической проверке: {e}")
+                if auto_check_running:                          # Проверка не остановлена ли проверка
+                    time.sleep(interval * 60)                   # Ожидание в случае ошибки
+
+    print(f"Автоматическая проверка запущена!")                 # Сообщение об успешном запуске
+    print(f"Интервал: {interval} минут")                        # Вывод интервала
+
+    auto_check_running = True                                   # Установка флага запуска
+    auto_check_thread = threading.Thread(target=auto_check_loop, daemon=True)  # Создание потока (автоматически завершится с программой)
+    auto_check_thread.start()                                   # Запуск потока
+
+    config['auto_check'] = {                                    # Сохраняем настройки в конфиг
+        'enabled': True,                                        # Флаг включения
+        'interval_minutes': interval,                           # Интервал в минутах
+        'started_at': time.strftime("%Y-%m-%d %H:%M:%S")        # Время запуска
+    }
+    save_config(config)                                         # Сохранение конфигурации
+
+
+def stop_auto_check(config):                                    # Останавливает автоматическую проверку.
+    global auto_check_running                                   # Использование глобальной переменной
+
+    if not auto_check_running:                                  # Проверка запущена ли автоматическая проверка
+        print("Автоматическая проверка не запущена.")           # Сообщение если не запущена
+        return                                                  # Выход из функции
+
+    auto_check_running = False                                  # Установка флага остановки
+
+                                                                # Обновляем конфиг
+    if 'auto_check' in config:                                  # Проверка наличия раздела автоматической проверки
+        config['auto_check']['enabled'] = False                 # Установка флага выключения
+        config['auto_check']['stopped_at'] = time.strftime("%Y-%m-%d %H:%M:%S")  # Время остановки
+    save_config(config)                                         # Сохранение конфигурации
+
+    print("Автоматическая проверка остановлена.")               # Сообщение об остановке
+
+
+def show_auto_check_status(config):                             # Показывает статус автоматической проверки.
+    auto_check_info = config.get('auto_check', {})              # Получение информации о автоматической проверке
+
+    print("СТАТУС АВТОМАТИЧЕСКОЙ ПРОВЕРКИ")                     # Заголовок
+
+    if auto_check_info.get('enabled'):                          # Проверка включена ли автоматическая проверка
+        print("Статус: ✅  ЗАПУЩЕНА")                           # Сообщение о запущенной проверке
+        print(f"Интервал: {auto_check_info.get('interval_minutes', '?')} минут")    # Вывод интервала
+        print(f"Запущена: {auto_check_info.get('started_at', 'неизвестно')}")       # Вывод времени запуска
+    else:
+        print("Статус: ❌  ОСТАНОВЛЕНА")                        # Сообщение об остановленной проверке
+
+    print(f"Репозиториев для проверки: {len(config['repositories'])}")  # Вывод количества репозиториев
+
+
+def show_menu(config):                                          # Показывает главное меню программы.
+    auto_check_status = "✅ ВКЛ" if config.get('auto_check', {}).get('enabled') else "❌ ВЫКЛ"  # Статус авто-проверки
+
+    print()
     print("1. Показать список репозиториев")                    # Пункт меню 1
     print("2. Добавить репозиторий")                            # Пункт меню 2
     print("3. Удалить репозиторий (по названию)")               # Пункт меню 3
     print("4. Очистить весь список")                            # Пункт меню 4
     print("5. Обновить все репозитории (git pull)")             # Пункт меню 5
-    print("6. Выход")                                           # Пункт меню 6
+    print("6. Запустить автоматическую проверку")               # Пункт меню 6
+    print("7. Остановить автоматическую проверку")              # Пункт меню 7
+    print("8. Статус автоматической проверки")                  # Пункт меню 8
+    print("9. Выход")                                           # Пункт меню 9
+
+    print(f"Авто-проверка: {auto_check_status}")                 # Статус авто-проверки
 
 
 def main():                                                     # Основная функция программы.
     config = load_config()                                      # Загрузка конфигурации
 
+    if config.get('auto_check', {}).get('enabled'):  # Проверка была ли включена автопроверка
+        interval = config['auto_check'].get('interval_minutes', 5)  # Получение интервала из конфига
+        start_auto_check(config, interval)                          # Автоматический запуск автопроверки
+        time.sleep(1 * len(config['repositories']) + 0.5)           # Задержка перед показом меню
+
     while True:                                                 # Бесконечный цикл меню
-        show_menu()                                             # Отображение меню
+        show_menu(config)                                       # Отображение меню
 
         try:
-            choice = input("\nВыберите действие (1-6): ").strip()  # Запрос выбора у пользователя
+            choice = input("\nВыберите действие (1-9): ").strip()  # Запрос выбора у пользователя
 
             if choice == '1':
                 list_repositories(config)                       # Показать список репозиториев
@@ -320,9 +439,15 @@ def main():                                                     # Основна
             elif choice == '5':
                 update_all_repositories(config)                 # Проверить актуальность всех репозиториев
             elif choice == '6':
+                start_auto_check(config)                        # Запустить автоматическую проверку
+            elif choice == '7':
+                stop_auto_check(config)                         # Остановить автоматическую проверку
+            elif choice == '8':
+                show_auto_check_status(config)                  # Показать статус автоматической проверки
+            elif choice == '9':
                 break                                           # Выход из цикла
             else:
-                print("Неверный выбор. Пожалуйста, выберите от 1 до 6.")
+                print("Неверный выбор. Пожалуйста, выберите от 1 до 9.")
 
             input("\nНажмите Enter для продолжения...")         # Ожидание нажатия Enter
 
