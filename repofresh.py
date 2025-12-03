@@ -322,6 +322,7 @@ def start_auto_check(config, interval=None):                    # Запуска
         check_count = 0                                         # Счетчик выполненных проверок
 
         while auto_check_running:                               # Цикл пока флаг запущен
+            time.sleep(1)                                       # Задержка для корректного вывода
             try:
                 check_count += 1                                # Увеличение счетчика проверок
                 current_time = time.strftime("%H:%M:%S")        # Получение текущего времени
